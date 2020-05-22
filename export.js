@@ -1,10 +1,11 @@
 const puppeteer = require('puppeteer');
 const Xvfb      = require('xvfb');
-var exec = require('child_process').exec;
 const fs = require('fs');
 const os = require('os');
 const homedir = os.homedir();
 const platform = os.platform();
+const config = JSON.parse(fs.readFileSync("config.json", 'utf8'));
+const spawn = require('child_process').spawn;
 
 var xvfb        = new Xvfb({
     silent: true,
@@ -24,6 +25,8 @@ var options     = {
     '--no-sandbox',    
     '--shm-size=1gb',
     '--disable-dev-shm-usage',
+    '--start-fullscreen',
+    '--app=https://www.google.com/',
     `--window-size=${width},${height}`,
   ],
 }
@@ -57,7 +60,7 @@ async function main() {
 
         page.on('console', msg => {
             var m = msg.text();
-            console.log('PAGE LOG:', m)
+            //console.log('PAGE LOG:', m) // uncomment if you need
         });
 
         await page._client.send('Emulation.clearDeviceMetricsOverride')
@@ -67,8 +70,8 @@ async function main() {
         await page.waitForSelector('button[class=acorn-play-button]');
         await page.$eval('#navbar', element => element.style.display = "none");
         await page.$eval('#copyright', element => element.style.display = "none");
-        await page.$eval('.acorn-controls', element => element.style.display = "none");
-        await page.click('video[id=video]', {waitUntil: 'domcontentloaded'});
+        await page.$eval('.acorn-controls', element => element.style.opacity = "0");
+        await page.click('button[class=acorn-play-button]', {waitUntil: 'domcontentloaded'});
 
         await page.evaluate((x) => {
             console.log("REC_START");
@@ -108,7 +111,7 @@ main()
 function convertAndCopy(filename){
  
     var copyFromPath = homedir + "/Downloads";
-    var copyToPath = "/var/www/bigbluebutton-default/record";
+    var copyToPath = config.copyToPath;
     var onlyfileName = filename.split(".webm")
     var mp4File = onlyfileName[0] + ".mp4"
     var copyFrom = copyFromPath + "/" + filename + ""
@@ -120,32 +123,50 @@ function convertAndCopy(filename){
 
     console.log(copyTo);
     console.log(copyFrom);
-
-    var cmd = "ffmpeg -y -i '" + copyFrom + "' -c:v libx264 -preset veryfast -movflags faststart -profile:v high -level 4.2 -max_muxing_queue_size 9999 -vf mpdecimate -vsync vfr '" + copyTo + "'";
-
-    console.log("converting using: " + cmd);
     
-    exec(cmd, function(err, stdout, stderr) {
-
-        if (err) console.log('err:\n' + err);
-        //if (stderr) console.log('stderr:\n' + stderr);
-
-        if(!err){
-            console.log("Now deleting " + copyFrom)
-            try {
-              fs.unlinkSync(copyFrom);
-              console.log('successfully deleted ' + copyFrom);
-            } catch (err) {
-              console.log(err)
-            }
+    const ls = spawn('ffmpeg',
+        [   '-y',
+            '-i "' + copyFrom + '"',
+            '-c:v libx264',
+            '-preset veryfast',
+            '-movflags faststart',
+            '-profile:v high',
+            '-level 4.2',
+            '-max_muxing_queue_size 9999',
+            '-vf mpdecimate',
+            '-vsync vfr "' + copyTo + '"'
+        ],
+        {
+            shell: true
         }
+
+    );
+
+    ls.stdout.on('data', (data) => {
+        console.log(`stdout: ${data}`);
     });
+
+    ls.stderr.on('data', (data) => {
+        console.error(`stderr: ${data}`);
+    });
+
+    ls.on('close', (code) => {
+        console.log(`child process exited with code ${code}`);
+        if(code == 0)
+        {
+            console.log("Convertion done to here: " + copyTo)
+            fs.unlinkSync(copyFrom);
+            console.log('successfully deleted ' + copyFrom);
+        }
+       
+    });
+
 }
 
 function copyOnly(filename){
 
     var copyFrom = homedir + "/Downloads/" + filename;
-    var copyToPath = "/var/www/bigbluebutton-default/record";
+    var copyToPath = config.copyToPath;
     var copyTo = copyToPath + "/" + filename;
 
     if(!fs.existsSync(copyToPath)){
